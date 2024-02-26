@@ -1,0 +1,137 @@
+services:
+
+  llm:
+    container_name: nemollm-inference-ms
+    image: nvcr.io/ohlfw0olaadg/ea-participants/nemollm-inference-ms:24.01
+    volumes:
+    - ${MODEL_DIRECTORY:?please update the env file and source it before running}:/model-store
+    command: nemollm_inference_ms --model ${MODEL_NAME:?please update the env file and source it before running} --openai_port 9999 --nemo_port 9998 --num_gpus=1
+    ports:
+    - "8000:8000"
+    - "9998:9998"
+    - "9999:9999"
+    expose:
+    - "8000"
+    - "9998"
+    - "9999"
+    shm_size: 20gb
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${INFERENCE_GPU_COUNT:-all}
+              capabilities: [gpu]
+
+  embeddings:
+    container_name: nemo-retriever-embedding-ms
+    image: nvcr.io/ohlfw0olaadg/ea-participants/nemo-retriever-embedding-microservice:24.01
+    volumes:
+    - ${EMBEDDING_MODEL_DIRECTORY:?please update the env file and source it before running}:/model-checkpoint-path
+    command:  bin/web -p 9080 -c /model-checkpoint-path/${EMBEDDING_MODEL_CKPT_NAME} -g model_config_templates/${EMBEDDING_MODEL_NAME}_template.yaml
+    ports:
+    - "9080:9080"
+    expose:
+    - "9080"
+    shm_size: 8gb
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${INFERENCE_GPU_COUNT:-all}
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9080/v1/health/ready"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 10m
+
+  pgvector:
+    container_name: pgvector
+    image: ankane/pgvector:v0.5.1
+    ports:
+    - 5432:5432
+    expose:
+    - "5432"
+    volumes:
+    - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/data:/var/lib/postgresql/data
+    environment:
+    - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password}
+    - POSTGRES_USER=${POSTGRES_USER:-postgres}
+    - POSTGRES_DB=${POSTGRES_DB:-api}
+
+  query:
+    container_name: chain-server
+    image: nvcr.io/ohlfw0olaadg/ea-rag-examples/enterprise-rag:0.3.0-chain-server
+    build:
+      context: ../../
+      dockerfile: ./RetrievalAugmentedGeneration/Dockerfile
+      args:
+        EXAMPLE_NAME: ${RAG_EXAMPLE}
+    command: --port 8081 --host 0.0.0.0
+    environment:
+      APP_VECTORSTORE_URL: "pgvector:5432"
+      APP_VECTORSTORE_NAME: "pgvector"
+      APP_LLM_SERVERURL: "llm:9999"
+      APP_LLM_MODELNAME: ${MODEL_NAME:?please update the env file and source it before running}
+      APP_LLM_MODELENGINE: nemo-infer
+      APP_EMBEDDINGS_SERVERURL: "embeddings:9080"
+      APP_EMBEDDINGS_MODELNAME: ${EMBEDDING_MODEL_NAME:?please update the env file and source it before running}
+      APP_EMBEDDINGS_MODELENGINE: nemo-embed
+      APP_CONFIG_FILE: ${APP_CONFIG_FILE}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-api}
+      COLLECTION_NAME: ${RAG_EXAMPLE}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      ENABLE_TRACING: false
+    volumes:
+      - ${APP_CONFIG_FILE}:${APP_CONFIG_FILE}
+    ports:
+    - "8081:8081"
+    expose:
+    - "8081"
+    shm_size: 5gb
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      - "pgvector"
+      - "llm"
+      - "embeddings"
+
+  frontend:
+    container_name: llm-playground
+    image: nvcr.io/ohlfw0olaadg/ea-rag-examples/enterprise-rag:0.3.0-llm-playground
+    build:
+      context: ../.././RetrievalAugmentedGeneration/frontend/
+      dockerfile: Dockerfile
+    command: --port 8090
+    environment:
+      APP_SERVERURL: http://query
+      APP_SERVERPORT: 8081
+      APP_MODELNAME: ${MODEL_NAME:-${MODEL_ARCHITECTURE}}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      ENABLE_TRACING: false
+      RIVA_API_URI: ${RIVA_API_URI}
+      RIVA_API_KEY: ${RIVA_API_KEY}
+      RIVA_FUNCTION_ID: ${RIVA_FUNCTION_ID}
+      TTS_SAMPLE_RATE: ${TTS_SAMPLE_RATE}
+    ports:
+    - "8090:8090"
+    expose:
+    - "8090"
+    depends_on:
+      - query
+
+networks:
+  default:
+    name: nvidia-llm

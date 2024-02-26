@@ -17,9 +17,9 @@
 import os
 import base64
 import logging
-from functools import lru_cache
+from functools import lru_cache, wraps
 from urllib.parse import urlparse
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Callable, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -117,11 +117,21 @@ class LimitRetrievedNodesLength(BaseNodePostprocessor):
 
         return included_nodes
 
+def utils_cache(func: Callable) -> Callable:
+    """Use this to convert unhashable args to hashable ones"""
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        # Convert unhashable args to hashable ones
+        args_hashable = tuple(tuple(arg) if isinstance(arg, (list, dict, set)) else arg for arg in args)
+        kwargs_hashable = {key: tuple(value) if isinstance(value, (list, dict, set)) else value for key, value in kwargs.items()}
+        return func(*args_hashable, **kwargs_hashable)
+    return wrapper
 
+@utils_cache
 @lru_cache
-def set_service_context() -> None:
+def set_service_context(**kwargs) -> None:
     """Set the global service context."""
-    llm = LangChainLLM(get_llm())
+    llm = LangChainLLM(get_llm(**kwargs))
     embedding = LangchainEmbedding(get_embedding_model())
     service_context = ServiceContext.from_defaults(
         llm=llm, embed_model=embedding
@@ -232,8 +242,9 @@ def get_doc_retriever(num_nodes: int = 4) -> "BaseRetriever":
     return index.as_retriever(similarity_top_k=num_nodes)
 
 
-@lru_cache
-def get_llm() -> LLM | SimpleChatModel:
+@utils_cache
+@lru_cache()
+def get_llm(**kwargs) -> LLM | SimpleChatModel:
     """Create the LLM connection."""
     settings = get_config()
 
@@ -242,24 +253,48 @@ def get_llm() -> LLM | SimpleChatModel:
         trtllm = TensorRTLLM(  # type: ignore
             server_url=settings.llm.server_url,
             model_name=settings.llm.model_name,
-            tokens=DEFAULT_NUM_TOKENS,
+            temperature = kwargs.get('temperature', None),
+            top_p = kwargs.get('top_p', None),
+            tokens = kwargs.get('max_tokens', DEFAULT_NUM_TOKENS),
+            streaming = kwargs.get('stream', None)
         )
+        unused_params = [key for key in kwargs.keys() if key not in ['temperature', 'top_p', 'max_tokens', 'stream']]
+        if unused_params:
+            logger.warning(f"The following parameters from kwargs are not supported: {unused_params} for {settings.llm.model_engine}")
         return trtllm
     elif settings.llm.model_engine == "nv-ai-foundation":
-        return ChatNVIDIA(model=settings.llm.model_name)
+        unused_params = [key for key in kwargs.keys() if key not in ['temperature', 'top_p', 'max_tokens']]
+        if unused_params:
+            logger.warning(f"The following parameters from kwargs are not supported: {unused_params} for {settings.llm.model_engine}")
+        return ChatNVIDIA(model=settings.llm.model_name,
+                          temperature = kwargs.get('temperature', None),
+                          top_p = kwargs.get('top_p', None),
+                          max_tokens = kwargs.get('max_tokens', None))
     elif settings.llm.model_engine == "nemo-infer":
+        unused_params = [key for key in kwargs.keys() if key not in ['temperature', 'top_p', 'max_tokens',  'stream']]
+        if unused_params:
+            logger.warning(f"The following parameters from kwargs are not supported: {unused_params} for {settings.llm.model_engine}")
         nemo_infer = NemoInfer(
             server_url=f"http://{settings.llm.server_url}/v1/completions",
             model=settings.llm.model_name,
-            tokens=DEFAULT_NUM_TOKENS,
+            temperature = kwargs.get('temperature', None),
+            top_p = kwargs.get('top_p', None),
+            tokens = kwargs.get('max_tokens', DEFAULT_NUM_TOKENS),
+            streaming = kwargs.get('stream', None)
         )
         return nemo_infer
     elif settings.llm.model_engine == "nemo-infer-openai":
+        unused_params = [key for key in kwargs.keys() if key not in ['temperature', 'top_p', 'max_tokens',  'stream']]
+        if unused_params:
+            logger.warning(f"The following parameters from kwargs are not supported: {unused_params} for {settings.llm.model_engine}")
         nemo_infer = ChatOpenAI(
             openai_api_base=f"http://{settings.llm.server_url}/v1/",
             openai_api_key="xyz",
             model_name=settings.llm.model_name,
-            max_tokens=DEFAULT_NUM_TOKENS,
+            temperature = kwargs.get('temperature', None),
+            top_p = kwargs.get('top_p', None),
+            max_tokens=kwargs.get('max_tokens', DEFAULT_NUM_TOKENS),
+            streaming = kwargs.get('stream', None)
         )
         return nemo_infer
     else:

@@ -1,0 +1,76 @@
+# Default values for rag-llm-pipeline
+
+imagePullSecret:
+  # Leave blank, if no imagePullSecret is needed.
+  registry: "nvcr.io"
+  name: "ngc-secret-multi-turn"
+  # If set to false, the chart expects either a imagePullSecret
+  # with the name configured above to be present on the cluster or that no
+  # credentials are needed.
+  create: true
+  username: '$oauthtoken'
+  password: ""
+
+query:
+  image: nvcr.io/ohlfw0olaadg/ea-rag-examples/chain-server:multi-turn-rag-0.4.0
+  name: query-router-multi-turn
+  replicas: 1
+  resources:
+    limits:
+      nvidia.com/gpu: 1  # Number of GPUs to present to the running service
+  nodeSelector: {}
+  tolerations: {}
+  affinity: {}
+  env:
+      APP_VECTORSTORE_URL: "pgvector.rag-sample:5432"
+      APP_VECTORSTORE_NAME: "pgvector"
+      APP_LLM_SERVERURL: "nemollm-inference.rag-sample:8005" # openai_port of inference service
+      APP_LLM_MODELNAME: llama-2-13b-chat
+      APP_LLM_MODELENGINE: nemo-infer-openai
+      APP_EMBEDDINGS_SERVERURL: "nemollm-embedding.rag-sample:8080"
+      APP_EMBEDDINGS_MODELNAME: NV-Embed-QA
+      APP_EMBEDDINGS_MODELENGINE: nemo-embed
+      APP_CONFIG_FILE: /dev/null
+      POSTGRES_PASSWORD: password
+      POSTGRES_USER: postgres
+      POSTGRES_DB: api
+      COLLECTION_NAME: csv-rag
+  service:
+      type: ClusterIP
+      targetPort: 8085
+      ports:
+        - port: 8085
+          targetPort: http
+          protocol: TCP
+          name: http
+
+frontend:
+  image: nvcr.io/ohlfw0olaadg/ea-rag-examples/rag-playground:0.4.0
+  name: rag-playground-multi-turn
+  replicas: 1
+  nodeSelector: {}
+  tolerations: {}
+  affinity: {}
+  env:
+    - name: APP_MODELNAME
+      value: "llama-2-13b-chat"
+    - name: APP_SERVERPORT
+      value: "8085"
+    - name: APP_SERVERURL
+      value: http://query-router-multi-turn
+    - name: RIVA_API_URI
+      value: ""
+    - name: RIVA_API_KEY
+      value: ""
+    - name: RIVA_FUNCTION_ID
+      value: ""
+    - name: TTS_SAMPLE_RATE
+      value: 48000
+  service:
+      type: NodePort
+      targetPort: 8095
+      ports:
+        - port: 8095
+          targetPort: http
+          protocol: TCP
+          name: http

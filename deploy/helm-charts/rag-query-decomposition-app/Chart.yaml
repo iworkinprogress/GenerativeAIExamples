@@ -1,0 +1,6 @@
+apiVersion: v2
+appVersion: v0.4.0
+description: A Helm chart for a sample RAG application that showcases using NVIDIA AI Foundation Models endpoints and query decomposition.
+name: rag-query-decomposition-app
+type: application
+version: v0.4.0

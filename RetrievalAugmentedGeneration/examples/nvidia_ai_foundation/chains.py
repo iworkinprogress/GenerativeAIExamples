@@ -61,64 +61,66 @@ class NvidiaAIFoundation(BaseExample):
             raise ValueError("Failed to upload document. Please upload an unstructured text document.")
 
     def llm_chain(
-        self, context: str, question: str, num_tokens: str
+        self, query: str, chat_history: List["Message"], **kwargs
     ) -> Generator[str, None, None]:
         """Execute a simple LLM chain using the components defined above."""
 
         logger.info("Using llm to generate response directly without knowledge base.")
+        system_message = [("system", settings.prompts.chat_template)]
+        conversation_history = [(msg.role, msg.content) for msg in chat_history]
+        user_input = [("user", "{input}")]
+
+        # Checking if conversation_history is not None and not empty
         prompt_template = ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    settings.prompts.chat_template,
-                ),
-                ("user", "{input}"),
-            ]
+            system_message + conversation_history + user_input
+        ) if conversation_history else ChatPromptTemplate.from_messages(
+            system_message + user_input
         )
 
-        llm = get_llm()
+        llm = get_llm(**kwargs)
 
         chain = prompt_template | llm | StrOutputParser()
         augmented_user_input = (
-            "Context: " + context + "\n\nQuestion: " + question + "\n"
+            "\n\nQuestion: " + query + "\n"
         )
         return chain.stream({"input": augmented_user_input})
 
-    def rag_chain(self, prompt: str, num_tokens: int) -> Generator[str, None, None]:
+    def rag_chain(self, query: str, chat_history: List["Message"], **kwargs) -> Generator[str, None, None]:
         """Execute a Retrieval Augmented Generation chain using the components defined above."""
 
         logger.info("Using rag to generate response from document")
-
+        system_message = [("system", settings.prompts.rag_template)]
+        conversation_history = [(msg.role, msg.content) for msg in chat_history]
+        user_input = [("user", "{input}")]
+        
+        # Checking if conversation_history is not None and not empty
         prompt_template = ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    settings.prompts.rag_template,
-                ),
-                ("user", "{input}"),
-            ]
+            system_message + conversation_history + user_input
+        ) if conversation_history else ChatPromptTemplate.from_messages(
+            system_message + user_input
         )
-        llm = get_llm()
-
+        
+        llm = get_llm(**kwargs)
+        
         chain = prompt_template | llm | StrOutputParser()
 
         try:
             if vectorstore != None:
                 try:
                     retriever = vectorstore.as_retriever(search_type="similarity_score_threshold", search_kwargs={"score_threshold": 0.25})
-                    docs = retriever.get_relevant_documents(prompt)
+                    docs = retriever.get_relevant_documents(query)
                 except NotImplementedError:
                     # Some retriever like milvus don't have similarity score threshold implemented
                     retriever = vectorstore.as_retriever()
-                    docs = retriever.get_relevant_documents(prompt)
+                    docs = retriever.get_relevant_documents(query)
 
 
                 context = ""
                 for doc in docs:
                     context += doc.page_content + "\n\n"
-
+                
                 augmented_user_input = (
-                    "Context: " + context + "\n\nQuestion: " + prompt + "\n"
+                    "Context: " + context + "\n\nQuestion: " + query + "\n"
                 )
 
                 return chain.stream({"input": augmented_user_input})

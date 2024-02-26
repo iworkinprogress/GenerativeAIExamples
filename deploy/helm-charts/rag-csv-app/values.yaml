@@ -1,0 +1,79 @@
+# Default values for rag-llm-pipeline
+
+imagePullSecret:
+  # Leave blank, if no imagePullSecret is needed.
+  registry: "nvcr.io"
+  name: "ngc-secret-csv"
+  # If set to false, the chart expects either a imagePullSecret
+  # with the name configured above to be present on the cluster or that no
+  # credentials are needed.
+  create: true
+  username: '$oauthtoken'
+  password: ""
+
+query:
+  image: nvcr.io/ohlfw0olaadg/ea-rag-examples/chain-server:csv-rag-0.4.0
+  name: query-router-csv
+  replicas: 1
+  resources:
+    limits:
+      nvidia.com/gpu: 1  # Number of GPUs to present to the running service
+  nodeSelector: {}
+  tolerations: {}
+  affinity: {}
+  env:
+      APP_VECTORSTORE_URL: "pgvector.rag-sample:5432"
+      APP_VECTORSTORE_NAME: "pgvector"
+      POSTGRES_PASSWORD: password
+      POSTGRES_USER: postgres
+      POSTGRES_DB: api
+      COLLECTION_NAME: csv-rag
+      APP_LLM_MODELNAME: mixtral_8x7b
+      APP_LLM_MODELENGINE: nv-ai-foundation
+      APP_EMBEDDINGS_MODELNAME: nvolveqa_40k
+      APP_EMBEDDINGS_MODELENGINE: nv-ai-foundation
+      APP_TEXTSPLITTER_CHUNKSIZE: 2000
+      APP_TEXTSPLITTER_CHUNKOVERLAP: 200
+      APP_PROMPTS_CHATTEMPLATE: "You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe. Please ensure that your responses are positive in nature."
+      APP_PROMPTS_RAGTEMPLATE: "You are a helpful AI assistant named Envie. You will reply to questions only based on the context that you are provided. If something is out of context, you will refrain from replying and politely decline to respond to the user."
+      APP_CONFIG_FILE: /dev/null
+      CSV_NAME: PdM_machines
+  service:
+      type: ClusterIP
+      targetPort: 8084
+      ports:
+        - port: 8084
+          targetPort: http
+          protocol: TCP
+          name: http
+
+frontend:
+  image: nvcr.io/ohlfw0olaadg/ea-rag-examples/rag-playground:0.4.0
+  name: rag-playground-csv
+  replicas: 1
+  nodeSelector: {}
+  tolerations: {}
+  affinity: {}
+  env:
+    - name: APP_MODELNAME
+      value: "mixtral_8x7b"
+    - name: APP_SERVERPORT
+      value: "8084"
+    - name: APP_SERVERURL
+      value: http://query-router-csv
+    - name: RIVA_API_URI
+      value: ""
+    - name: RIVA_API_KEY
+      value: ""
+    - name: RIVA_FUNCTION_ID
+      value: ""
+    - name: TTS_SAMPLE_RATE
+      value: 48000
+  service:
+      type: NodePort
+      targetPort: 8093
+      ports:
+        - port: 8093
+          targetPort: http
+          protocol: TCP
+          name: http

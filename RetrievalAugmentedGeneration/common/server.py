@@ -25,7 +25,7 @@ from inspect import getmembers, isclass
 
 from fastapi import FastAPI, File, UploadFile, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from pymilvus.exceptions import MilvusException, MilvusUnavailableException
 from RetrievalAugmentedGeneration.common import utils, tracing
 
@@ -37,13 +37,29 @@ app = FastAPI()
 
 EXAMPLE_DIR = "RetrievalAugmentedGeneration/example"
 
+class Message(BaseModel):
+    """Definition of the Chat Message type."""
+    role: str = Field(description="Role for a message AI, User and System")
+    content: str = Field(description="The input query/prompt to the pipeline.")
+
+    @validator('role')
+    def validate_role(cls, value):
+        valid_roles = {'user', 'assistant', 'system'}
+        if value.lower() not in valid_roles:
+            raise ValueError("Role must be one of 'user', 'assistant', or 'system'")
+        return value.lower()
+
 class Prompt(BaseModel):
     """Definition of the Prompt API data type."""
-
-    question: str = Field(description="The input query/prompt to the pipeline.")
-    context: str = Field(description="Additional context for the question (optional)")
-    use_knowledge_base: bool = Field(description="Whether to use a knowledge base", default=True)
-    num_tokens: int = Field(description="The maximum number of tokens in the response.", default=50)
+    messages: List[Message] = Field(..., description="A list of messages comprising the conversation so far. The roles of the messages must be alternating between user and assistant. The last input message should have role user. A message with the the system role is optional, and must be the very first message if it is present.")
+    use_knowledge_base: bool = Field(..., description="Whether to use a knowledge base")
+    temperature: float = Field(0.2, description="The sampling temperature to use for text generation. The higher the temperature value is, the less deterministic the output text will be. It is not recommended to modify both temperature and top_p in the same call.")
+    top_p: float = Field(0.7, description="The top-p sampling mass used for text generation. The top-p value determines the probability mass that is sampled at sampling time. For example, if top_p = 0.2, only the most likely tokens (summing to 0.2 cumulative probability) will be sampled. It is not recommended to modify both temperature and top_p in the same call.")
+    max_tokens: int = Field(1024, description="The maximum number of tokens to generate in any given call. Note that the model is not aware of this value, and generation will simply stop at the number of tokens specified.")
+    seed: int = Field(42, description="If specified, our system will make a best effort to sample deterministically, such that repeated requests with the same seed and parameters should return the same result.")
+    bad: List[str] = Field(None, description="A word or list of words not to use. The words are case sensitive.")
+    stop: List[str] = Field(None, description="A string or a list of strings where the API will stop generating further tokens. The returned text will not contain the stop sequence.")
+    stream: bool = Field(False, description="If set, partial message deltas will be sent. Tokens will be sent as data-only server-sent events (SSE) as they become available (JSON responses are prefixed by data:), with the stream terminated by a data: [DONE] message.")
 
 
 class DocumentSearch(BaseModel):
@@ -122,15 +138,31 @@ async def upload_document(request: Request, file: UploadFile = File(...)) -> JSO
 @tracing.instrumentation_wrapper
 async def generate_answer(request: Request, prompt: Prompt) -> StreamingResponse:
     """Generate and stream the response to the provided prompt."""
-
+    
+    chat_history = prompt.messages
+    # The last user message will be the query for the rag or llm chain
+    last_user_message = next((message.content for message in reversed(chat_history) if message.role == 'user'), None)
+    
+    # Find and remove the last user message if present
+    for i in reversed(range(len(chat_history))):
+        if chat_history[i].role == 'user':
+            del chat_history[i]
+            break  # Remove only the last user message
+    
+    # All the other information from the prompt like the temperature, top_p etc., are llm_settings
+    llm_settings =  {
+            key: value
+            for key, value in vars(prompt).items()
+            if key not in ['messages', 'use_knowledge_base']
+        }
     try:
         example = app.example()
         if prompt.use_knowledge_base:
             logger.info("Knowledge base is enabled. Using rag chain for response generation.")
-            generator = example.rag_chain(prompt.question, prompt.num_tokens)
+            generator = example.rag_chain(query=last_user_message, chat_history=chat_history, **llm_settings)
             return StreamingResponse(generator, media_type="text/event-stream")
 
-        generator = example.llm_chain(prompt.context, prompt.question, prompt.num_tokens)
+        generator = example.llm_chain(query=last_user_message, chat_history=chat_history, **llm_settings)
         return StreamingResponse(generator, media_type="text/event-stream")
 
     except (MilvusException, MilvusUnavailableException) as e:

@@ -1,0 +1,6 @@
+apiVersion: v2
+appVersion: v0.4.0
+description: A Helm chart for sample RAG application
+name: rag-multi-turn-app
+type: application
+version: v0.4.0

@@ -12,3 +12,9 @@ deploy/*.txt
 # Docker Compose exclusions
 volumes/
 uploaded_files/
+
+# Visual Studio Code
+.vscode
+
+# Node modules
+**/node_modules

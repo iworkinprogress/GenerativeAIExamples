@@ -74,10 +74,20 @@ class ChatClient:
     ) -> typing.Generator[str, None, None]:
         """Make a model prediction."""
         data = {
-            "question": query,
-            "context": "",
-            "use_knowledge_base": use_knowledge_base,
-            "num_tokens": num_tokens,
+               "messages": [
+                        {
+                        "role": "user",
+                        "content": query
+                        }
+                    ],
+                    "use_knowledge_base": use_knowledge_base,
+                    "temperature": 0.2,
+                    "top_p": 0.7,
+                    "max_tokens": num_tokens,
+                    "seed": 42,
+                    "bad": ["string"],
+                    "stop": ["string"],
+                    "stream": True
         }
         url = f"{self.server_url}/generate"
         _LOGGER.debug(
